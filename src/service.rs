@@ -5,15 +5,16 @@ mod state;
 use self::state::MetaFungible;
 use async_graphql::{EmptySubscription, Schema};
 use linera_sdk::graphql::GraphQLMutationRoot;
-use linera_sdk::{base::WithServiceAbi, Service, ServiceRuntime, ViewStateStorage};
+use linera_sdk::views::{View, ViewStorageContext};
+use linera_sdk::{base::WithServiceAbi, Service, ServiceRuntime};
 use meta_fungible::Operation;
-use std::sync::Arc;
-use thiserror::Error;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct MetaFungibleService {
     state: Arc<MetaFungible>,
-    _runtime: Arc<ServiceRuntime<Self>>,
+    #[allow(unused)]
+    runtime: Arc<Mutex<ServiceRuntime<Self>>>,
 }
 
 linera_sdk::service!(MetaFungibleService);
@@ -23,37 +24,24 @@ impl WithServiceAbi for MetaFungibleService {
 }
 
 impl Service for MetaFungibleService {
-    type Error = ServiceError;
-    type Storage = ViewStateStorage<Self>;
-    type State = MetaFungible;
+    type Parameters = ();
 
-    async fn new(state: Self::State, runtime: ServiceRuntime<Self>) -> Result<Self, Self::Error> {
-        Ok(MetaFungibleService {
+    async fn new(runtime: ServiceRuntime<Self>) -> Self {
+        let state = MetaFungible::load(ViewStorageContext::from(runtime.key_value_store()))
+            .await
+            .expect("Failed to load state");
+        MetaFungibleService {
             state: Arc::new(state),
-            _runtime: Arc::new(runtime),
-        })
+            runtime: Arc::new(Mutex::new(runtime)),
+        }
     }
 
-    async fn handle_query(&self, query: Self::Query) -> Result<Self::QueryResponse, Self::Error> {
+    async fn handle_query(&self, query: Self::Query) -> Self::QueryResponse {
         let schema = Schema::new(
             self.state.clone(),
             Operation::mutation_root(),
             EmptySubscription,
         );
-        let response = schema.execute(query).await;
-        Ok(response)
+        schema.execute(query).await
     }
-}
-
-/// An error that can occur while querying the service.
-#[derive(Debug, Error)]
-pub enum ServiceError {
-    /// Query not supported by the application.
-    #[error("Queries not supported by application")]
-    QueriesNotSupported,
-
-    /// Invalid query argument; could not deserialize request.
-    #[error("Invalid query argument; could not deserialize request")]
-    InvalidQuery(#[from] serde_json::Error),
-    // Add error variants here.
 }

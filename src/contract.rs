@@ -2,11 +2,11 @@
 
 mod state;
 
-use async_trait::async_trait;
+use fungible::{FungibleAbi, Message};
 use linera_sdk::base::ApplicationId;
-use linera_sdk::{base::WithContractAbi, Contract, ContractRuntime, ViewStateStorage};
+use linera_sdk::views::{RootView, View, ViewStorageContext};
+use linera_sdk::{base::WithContractAbi, Contract, ContractRuntime};
 use meta_fungible::Operation;
-use thiserror::Error;
 
 use self::state::MetaFungible;
 
@@ -27,32 +27,21 @@ impl MetaFungibleContract {
     }
 }
 
-#[async_trait]
 impl Contract for MetaFungibleContract {
-    type Error = ContractError;
-    type Storage = ViewStateStorage<Self>;
-    type State = MetaFungible;
-    type Message = ();
+    type Parameters = ApplicationId<FungibleAbi>;
+    type InstantiationArgument = ();
+    type Message = Message;
 
-    async fn new(state: Self::State, runtime: ContractRuntime<Self>) -> Result<Self, Self::Error> {
-        Ok(MetaFungibleContract { state, runtime })
+    async fn load(runtime: ContractRuntime<Self>) -> Self {
+        let state = MetaFungible::load(ViewStorageContext::from(runtime.key_value_store()))
+            .await
+            .expect("Failed to load state");
+        MetaFungibleContract { state, runtime }
     }
 
-    fn state_mut(&mut self) -> &mut Self::State {
-        &mut self.state
-    }
+    async fn instantiate(&mut self, _: Self::InstantiationArgument) {}
 
-    async fn initialize(
-        &mut self,
-        _argument: Self::InitializationArgument,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    async fn execute_operation(
-        &mut self,
-        operation: Self::Operation,
-    ) -> Result<Self::Response, Self::Error> {
+    async fn execute_operation(&mut self, operation: Self::Operation) -> Self::Response {
         match operation {
             Operation::Transfer {
                 owner,
@@ -66,25 +55,13 @@ impl Contract for MetaFungibleContract {
                     target_account,
                 };
                 self.runtime.call_application(true, fungible_id, &operation);
-                Ok(())
             }
         }
     }
 
-    async fn execute_message(&mut self, _message: Self::Message) -> Result<(), Self::Error> {
-        Ok(())
+    async fn execute_message(&mut self, _message: Self::Message) {}
+
+    async fn store(mut self) {
+        self.state.save().await.expect("Failed to persist state");
     }
-}
-
-/// An error that can occur during the contract execution.
-#[derive(Debug, Error)]
-pub enum ContractError {
-    /// Failed to deserialize BCS bytes
-    #[error("Failed to deserialize BCS bytes")]
-    BcsError(#[from] bcs::Error),
-
-    /// Failed to deserialize JSON string
-    #[error("Failed to deserialize JSON string")]
-    JsonError(#[from] serde_json::Error),
-    // Add more error variants here.
 }
